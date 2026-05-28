@@ -1,0 +1,64 @@
+{
+  "version": 2,
+  "dgSpecHash": "8eG+Qy9cCTI=",
+  "success": false,
+  "projectFilePath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+  "expectedPackageFiles": [],
+  "logs": [
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'System.Management (>= 8.0.0)' for 'net6.0-windows7.0'.",
+      "projectPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "filePath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "libraryId": "System.Management",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.NETCore.App.Ref (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "projectPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "filePath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "libraryId": "Microsoft.NETCore.App.Ref",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.WindowsDesktop.App.Ref (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "projectPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "filePath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "libraryId": "Microsoft.WindowsDesktop.App.Ref",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.AspNetCore.App.Ref (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "projectPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "filePath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "libraryId": "Microsoft.AspNetCore.App.Ref",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.NETCore.App.Host.win-x64 (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "projectPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "filePath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "libraryId": "Microsoft.NETCore.App.Host.win-x64",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    }
+  ]
+}

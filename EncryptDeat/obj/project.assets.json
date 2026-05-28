@@ -1,0 +1,145 @@
+{
+  "version": 3,
+  "targets": {
+    "net6.0-windows7.0": {}
+  },
+  "libraries": {},
+  "projectFileDependencyGroups": {
+    "net6.0-windows7.0": [
+      "System.Management >= 8.0.0"
+    ]
+  },
+  "packageFolders": {
+    "C:\\Users\\kdbbu\\.nuget\\packages\\": {}
+  },
+  "project": {
+    "version": "1.0.0",
+    "restore": {
+      "projectUniqueName": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "projectName": "EncryptDeat",
+      "projectPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\EncryptDeat.csproj",
+      "packagesPath": "C:\\Users\\kdbbu\\.nuget\\packages\\",
+      "outputPath": "C:\\Users\\kdbbu\\OneDrive\\Documents\\Visual Studio 18\\Projects\\EncryptDeat\\EncryptDeat\\obj\\",
+      "projectStyle": "PackageReference",
+      "configFilePaths": [
+        "C:\\Users\\kdbbu\\AppData\\Roaming\\NuGet\\NuGet.Config"
+      ],
+      "originalTargetFrameworks": [
+        "net6.0-windows"
+      ],
+      "frameworks": {
+        "net6.0-windows7.0": {
+          "targetAlias": "net6.0-windows",
+          "projectReferences": {}
+        }
+      },
+      "warningProperties": {
+        "warnAsError": [
+          "NU1605"
+        ]
+      },
+      "restoreAuditProperties": {
+        "enableAudit": "true",
+        "auditLevel": "low",
+        "auditMode": "direct"
+      },
+      "SdkAnalysisLevel": "10.0.200"
+    },
+    "frameworks": {
+      "net6.0-windows7.0": {
+        "targetAlias": "net6.0-windows",
+        "dependencies": {
+          "System.Management": {
+            "target": "Package",
+            "version": "[8.0.0, )"
+          }
+        },
+        "imports": [
+          "net461",
+          "net462",
+          "net47",
+          "net471",
+          "net472",
+          "net48",
+          "net481"
+        ],
+        "assetTargetFallback": true,
+        "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.AspNetCore.App.Ref",
+            "version": "[6.0.36, 6.0.36]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Host.win-x64",
+            "version": "[6.0.36, 6.0.36]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Ref",
+            "version": "[6.0.36, 6.0.36]"
+          },
+          {
+            "name": "Microsoft.WindowsDesktop.App.Ref",
+            "version": "[6.0.36, 6.0.36]"
+          }
+        ],
+        "frameworkReferences": {
+          "Microsoft.NETCore.App": {
+            "privateAssets": "all"
+          },
+          "Microsoft.WindowsDesktop.App.WindowsForms": {
+            "privateAssets": "none"
+          }
+        },
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.203\\RuntimeIdentifierGraph.json"
+      }
+    }
+  },
+  "logs": [
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'System.Management (>= 8.0.0)' for 'net6.0-windows7.0'.",
+      "libraryId": "System.Management",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.NETCore.App.Ref (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "libraryId": "Microsoft.NETCore.App.Ref",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.WindowsDesktop.App.Ref (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "libraryId": "Microsoft.WindowsDesktop.App.Ref",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.AspNetCore.App.Ref (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "libraryId": "Microsoft.AspNetCore.App.Ref",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1100",
+      "level": "Error",
+      "message": "Unable to resolve 'Microsoft.NETCore.App.Host.win-x64 (= 6.0.36)' for 'net6.0-windows7.0'.",
+      "libraryId": "Microsoft.NETCore.App.Host.win-x64",
+      "targetGraphs": [
+        "net6.0-windows7.0"
+      ]
+    }
+  ]
+}
