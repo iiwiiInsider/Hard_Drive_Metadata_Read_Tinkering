@@ -1,0 +1,1832 @@
+﻿#if 0
+// EncryptDeat.cpp : Win32 GUI entry + admin-gated Unsafe Mode + futuristic blue/black UI
+//
+#include "framework.h"
+#include "EncryptDeat.h"
+
+#include <windows.h>
+#include <string>
+
+#define MAX_LOADSTRING 100
+
+// Global Variables:
+HINSTANCE hInst;                              // current instance
+WCHAR szTitle[MAX_LOADSTRING];                // The title bar text
+WCHAR szWindowClass[MAX_LOADSTRING];        // the main window class name
+
+// ---------------- Unsafe/Admin mode ----------------
+static constexpr wchar_t kConfigFileName[] = L"EncryptDeat.ini";
+static constexpr wchar_t kSectionSettings[] = L"Settings";
+static constexpr wchar_t kKeyUnsafeModeEnabled[] = L"UnsafeModeEnabled";
+
+static constexpr int kButtonToggleUnsafeId = 50001;
+static constexpr int kButtonRescanId = 50002;
+
+static bool g_unsafeModeEnabled = false;
+static bool g_isElevatedAdmin = false;
+
+static HWND g_hUnsafeCheck = nullptr;
+static HWND g_hUnsafeButton = nullptr;
+
+static bool GetIsProcessElevatedAdmin()
+{
+    // Best-effort check: token elevation + membership in Administrators group.
+    BOOL isAdmin = FALSE;
+
+    PSID administratorsGroup = nullptr;
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+
+    if (AllocateAndInitializeSid(&NtAuthority, 2,
+                                 SECURITY_BUILTIN_DOMAIN_RID,
+                                 DOMAIN_ALIAS_RID_ADMINS,
+                                 0, 0, 0, 0, 0, 0,
+                                 &administratorsGroup))
+    {
+        HANDLE hToken = nullptr;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+        {
+            CheckTokenMembership(hToken, administratorsGroup, &isAdmin);
+            CloseHandle(hToken);
+        }
+        FreeSid(administratorsGroup);
+    }
+
+    HANDLE hToken = nullptr;
+    BOOL elevated = FALSE;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        TOKEN_ELEVATION elevation = {};
+        DWORD cbSize = 0;
+        if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize))
+        {
+            elevated = elevation.TokenIsElevated ? TRUE : FALSE;
+        }
+        CloseHandle(hToken);
+    }
+
+    return (isAdmin && elevated);
+}
+
+static std::wstring GetExeDir()
+{
+    wchar_t path[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return L".";
+
+    std::wstring s(path);
+    size_t pos = s.find_last_of(L"\\/");
+    if (pos != std::wstring::npos) s.resize(pos);
+    return s;
+}
+
+static void LoadUnsafeModeSetting()
+{
+    std::wstring iniPath = GetExeDir() + L"\\" + kConfigFileName;
+
+    wchar_t buf[16] = {};
+    GetPrivateProfileStringW(
+        kSectionSettings,
+        kKeyUnsafeModeEnabled,
+        L"0",
+        buf,
+        (DWORD)std::size(buf),
+        iniPath.c_str());
+
+    g_unsafeModeEnabled = (buf[0] == L'1');
+}
+
+static void SaveUnsafeModeSetting()
+{
+    std::wstring iniPath = GetExeDir() + L"\\" + kConfigFileName;
+    WritePrivateProfileStringW(
+        kSectionSettings,
+        kKeyUnsafeModeEnabled,
+        g_unsafeModeEnabled ? L"1" : L"0",
+        iniPath.c_str());
+}
+
+static void SyncCheckboxToUnsafe(HWND hWnd)
+{
+    if (!g_hUnsafeCheck) return;
+
+    SendMessageW(g_hUnsafeCheck, BM_SETCHECK, g_unsafeModeEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    // Disable checkbox interaction if admin-gate not satisfied.
+    EnableWindow(g_hUnsafeCheck, g_isElevatedAdmin ? TRUE : FALSE);
+
+    // Redraw.
+    InvalidateRect(hWnd, nullptr, TRUE);
+}
+
+static void EnableUnsafeModeWithConfirmation(HWND hWnd)
+{
+    if (!g_isElevatedAdmin)
+    {
+        MessageBoxW(hWnd, L"Unsafe Mode requires Administrator elevation.", L"Admin required", MB_ICONWARNING | MB_OK);
+        g_unsafeModeEnabled = false;
+        SaveUnsafeModeSetting();
+        SyncCheckboxToUnsafe(hWnd);
+        return;
+    }
+
+    if (g_unsafeModeEnabled)
+    {
+        g_unsafeModeEnabled = false;
+        SaveUnsafeModeSetting();
+        SyncCheckboxToUnsafe(hWnd);
+        return;
+    }
+
+    int r1 = MessageBoxW(
+        hWnd,
+        L"WARNING: Enabling Unsafe Mode may unlock destructive operations.",
+        L"Unsafe Mode - Step 1 of 2",
+        MB_ICONEXCLAMATION | MB_OKCANCEL);
+
+    if (r1 != IDOK) {
+        SyncCheckboxToUnsafe(hWnd);
+        return;
+    }
+
+    int r2 = MessageBoxW(
+        hWnd,
+        L"Step 2: ENABLE Unsafe Mode?");
+
+    // If you reached here, we need a real second confirmation.
+    // (MessageBoxW with only one button set would be ambiguous; do properly.)
+    r2 = MessageBoxW(
+        hWnd,
+        L"Step 2: ENABLE Unsafe Mode?\n\nOnly proceed if you fully understand the risks.",
+        L"Unsafe Mode - Step 2 of 2",
+        MB_ICONWARNING | MB_YESNO);
+
+    if (r2 == IDYES)
+    {
+        g_unsafeModeEnabled = true;
+        SaveUnsafeModeSetting();
+    }
+
+    SyncCheckboxToUnsafe(hWnd);
+}
+
+static void DrawFuturisticHeader(HDC hdc, const RECT& rc, const std::wstring& text)
+{
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(100, 200, 255));
+
+    HFONT hFont = CreateFontW(
+        -18, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        VARIABLE_PITCH, L"Segoe UI");
+
+    HFONT hOld = (HFONT)SelectObject(hdc, hFont);
+    DrawTextW(hdc, text.c_str(), -1, const_cast<RECT*>(&rc), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, hOld);
+    DeleteObject(hFont);
+}
+
+static void DoPaint(HWND hWnd, HDC hdc)
+{
+    RECT rcClient{};
+    GetClientRect(hWnd, &rcClient);
+
+    // Background
+    HBRUSH bg = CreateSolidBrush(RGB(0, 8, 20));
+    FillRect(hdc, &rcClient, bg);
+    DeleteObject(bg);
+
+    // Header + status
+    RECT rcHeader = { 12, 10, rcClient.right - 12, 40 };
+    std::wstring title = g_unsafeModeEnabled ? L"EncryptDeat • UNSAFE MODE" : L"EncryptDeat • Safe Mode";
+    DrawFuturisticHeader(hdc, rcHeader, title);
+
+    RECT rcText = { 12, 50, rcClient.right - 12, 120 };
+    std::wstring status;
+    if (!g_isElevatedAdmin)
+        status = L"Safe Mode (not elevated). Toggle is locked unless run as Administrator.";
+    else
+        status = g_unsafeModeEnabled ? L"UNSAFE MODE ENABLED" : L"Admin detected. Unsafe Mode is OFF.";
+
+    SetTextColor(hdc, RGB(170, 220, 255));
+    HFONT hFont = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                VARIABLE_PITCH, L"Consolas");
+
+    HFONT hOld = (HFONT)SelectObject(hdc, hFont);
+    DrawTextW(hdc, status.c_str(), -1, &rcText, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    SelectObject(hdc, hOld);
+    DeleteObject(hFont);
+
+    // Grid lines
+    HPEN penGrid = CreatePen(PS_SOLID, 1, RGB(15, 120, 200));
+    HPEN penGlow = CreatePen(PS_SOLID, 1, RGB(60, 220, 255));
+
+    SelectObject(hdc, penGrid);
+    for (int y = 140; y < rcClient.bottom; y += 22)
+    {
+        MoveToEx(hdc, 0, y, nullptr);
+        LineTo(hdc, rcClient.right, y);
+    }
+
+    SelectObject(hdc, penGlow);
+    for (int x = 0; x < rcClient.right; x += 28)
+    {
+        MoveToEx(hdc, x, 0, nullptr);
+        LineTo(hdc, x, rcClient.bottom);
+    }
+
+    DeleteObject(penGrid);
+    DeleteObject(penGlow);
+
+    // Always-visible debug stamp (helps confirm WM_PAINT is working)
+    SetTextColor(hdc, RGB(80, 220, 255));
+    RECT rcDbg = { 12, 132, rcClient.right - 12, 155 };
+    DrawTextW(hdc, L"PAINT OK", -1, &rcDbg, DT_LEFT | DT_TOP | DT_SINGLELINE);
+}
+
+// Forward declarations
+ATOM                MyRegisterClass(HINSTANCE hInstance);
+BOOL                InitInstance(HINSTANCE, int);
+LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
+                      _In_opt_ HINSTANCE hPrevInstance,
+                      _In_ LPWSTR lpCmdLine,
+                      _In_ int nCmdShow)
+{
+    UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
+
+    LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
+    LoadStringW(hInstance, IDC_ENCRYPTDEAT, szWindowClass, MAX_LOADSTRING);
+    MyRegisterClass(hInstance);
+
+    if (!InitInstance(hInstance, nCmdShow))
+        return FALSE;
+
+    HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_ENCRYPTDEAT));
+
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0))
+    {
+        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    return (int)msg.wParam;
+}
+
+ATOM MyRegisterClass(HINSTANCE hInstance)
+{
+    WNDCLASSEXW wcex{};
+    wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = WndProc;
+    wcex.hInstance = hInstance;
+    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ENCRYPTDEAT));
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcex.lpszMenuName = MAKEINTRESOURCEW(IDC_ENCRYPTDEAT);
+    wcex.lpszClassName = szWindowClass;
+    wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+
+    return RegisterClassExW(&wcex);
+}
+
+BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
+{
+    hInst = hInstance;
+
+    g_isElevatedAdmin = GetIsProcessElevatedAdmin();
+    LoadUnsafeModeSetting();
+
+    HWND hWnd = CreateWindowW(
+        szWindowClass,
+        szTitle,
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, 0,
+        CW_USEDEFAULT, 0,
+        nullptr, nullptr,
+        hInstance, nullptr);
+
+    if (!hWnd)
+        return FALSE;
+
+    // Dynamic Unsafe Mode controls
+    g_hUnsafeCheck = CreateWindowW(
+        L"Button",
+        L"Enable Unsafe Mode (Admin required)",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        12, 128,
+        360, 24,
+        hWnd,
+        (HMENU)kButtonToggleUnsafeId,
+        hInstance,
+        nullptr);
+
+    g_hUnsafeButton = CreateWindowW(
+        L"Button",
+        L"Apply",
+        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+        380, 124,
+        90, 28,
+        hWnd,
+        (HMENU)kButtonRescanId,
+        hInstance,
+        nullptr);
+
+    // Sync checkbox state from config + admin-gate lock
+    SyncCheckboxToUnsafe(hWnd);
+
+    ShowWindow(hWnd, nCmdShow);
+    UpdateWindow(hWnd);
+    InvalidateRect(hWnd, nullptr, TRUE);
+
+    return TRUE;
+}
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_COMMAND:
+    {
+        int wmId = LOWORD(wParam);
+        int notifyCode = HIWORD(wParam);
+
+        if (wmId == kButtonToggleUnsafeId)
+        {
+            // Checkbox click comes as BN_CLICKED
+            if (notifyCode == BN_CLICKED)
+            {
+                // Read current checkbox state and treat click as toggle request.
+                g_unsafeModeEnabled = (SendMessageW(g_hUnsafeCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                // Gate + confirmations decide final state.
+                EnableUnsafeModeWithConfirmation(hWnd);
+            }
+            return 0;
+        }
+
+        if (wmId == IDM_ABOUT)
+        {
+            DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
+            return 0;
+        }
+
+        if (wmId == IDM_EXIT)
+        {
+            DestroyWindow(hWnd);
+            return 0;
+        }
+
+        // Placeholder apply/rescan button
+        if (wmId == kButtonRescanId)
+        {
+            MessageBoxW(hWnd, L"Apply/Rescan is a placeholder in this build.", L"Info", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        DoPaint(hWnd, hdc);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(hDlg, LOWORD(wParam));
+            return (INT_PTR)TRUE;
+        }
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+#endif
+
+#include "framework.h"
+#include "EncryptDeat.h"
+
+#include <bcrypt.h>
+#include <commdlg.h>
+#include <wbemidl.h>
+#include <comdef.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#pragma comment(lib, "Bcrypt.lib")
+#pragma comment(lib, "Wbemuuid.lib")
+
+#define MAX_LOADSTRING 100
+
+HINSTANCE hInst;
+WCHAR szTitle[MAX_LOADSTRING];
+WCHAR szWindowClass[MAX_LOADSTRING];
+
+static constexpr wchar_t kConfigFileName[] = L"EncryptDeat.ini";
+static constexpr wchar_t kSectionSettings[] = L"Settings";
+static constexpr wchar_t kKeyUnsafeModeEnabled[] = L"UnsafeModeEnabled";
+
+static constexpr int kButtonToggleUnsafeId = 50001;
+static constexpr int kButtonApplyUnsafeId = 50002;
+static constexpr int kButtonRescanId = 50003;
+static constexpr int kButtonEncryptId = 50005;
+static constexpr int kButtonDecryptId = 50006;
+static constexpr int kButtonIntegrityId = 50007;
+static constexpr int kButtonExportId = 50008;
+static constexpr int kEditPasswordId = 50009;
+static constexpr int kListDrivesId = 50013;
+static constexpr int kEditOutputId = 50014;
+
+struct AppSettings
+{
+    int hashChunkMb = 4;
+};
+
+struct DriveInfo
+{
+    std::wstring root;
+    std::wstring volumeName;
+    std::wstring fileSystem;
+    std::wstring driveType;
+    std::wstring bitLocker;
+    ULONGLONG freeBytes = 0;
+    ULONGLONG totalBytes = 0;
+};
+
+struct IntegrityResult
+{
+    bool hasData = false;
+    std::wstring filePath;
+    std::wstring sha256;
+    ULONGLONG fileSize = 0;
+    FILETIME lastWriteTime{};
+};
+
+static bool g_unsafeModeEnabled = false;
+static bool g_unsafeModeRequested = false;
+static bool g_isElevatedAdmin = false;
+static AppSettings g_settings;
+
+static HWND g_hUnsafeCheck = nullptr;
+static HWND g_hUnsafeButton = nullptr;
+static HWND g_hRescanButton = nullptr;
+static HWND g_hEncryptButton = nullptr;
+static HWND g_hDecryptButton = nullptr;
+static HWND g_hIntegrityButton = nullptr;
+static HWND g_hExportButton = nullptr;
+static HWND g_hPasswordEdit = nullptr;
+static HWND g_hDriveList = nullptr;
+static HWND g_hOutputEdit = nullptr;
+
+static std::vector<DriveInfo> g_drives;
+static std::wstring g_selectedFilePath;
+static IntegrityResult g_lastIntegrity;
+static std::wstring g_lastReportJson;
+
+static std::wstring GetExeDir()
+{
+    wchar_t path[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH)
+    {
+        return L".";
+    }
+
+    std::wstring full(path);
+    size_t pos = full.find_last_of(L"\\/");
+    return pos == std::wstring::npos ? L"." : full.substr(0, pos);
+}
+
+static std::wstring GetIniPath()
+{
+    return GetExeDir() + L"\\" + kConfigFileName;
+}
+
+static bool GetIsProcessElevatedAdmin()
+{
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        return false;
+    }
+
+    TOKEN_ELEVATION elevation{};
+    DWORD size = 0;
+    const bool isElevated =
+        GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &size) &&
+        elevation.TokenIsElevated != 0;
+
+    CloseHandle(hToken);
+    if (isElevated)
+    {
+        return true;
+    }
+
+    BOOL isAdminMember = FALSE;
+    PSID administratorsGroup = nullptr;
+    SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+
+    if (AllocateAndInitializeSid(&ntAuthority, 2,
+                                 SECURITY_BUILTIN_DOMAIN_RID,
+                                 DOMAIN_ALIAS_RID_ADMINS,
+                                 0, 0, 0, 0, 0, 0,
+                                 &administratorsGroup))
+    {
+        CheckTokenMembership(nullptr, administratorsGroup, &isAdminMember);
+        FreeSid(administratorsGroup);
+    }
+
+    return isAdminMember == TRUE;
+}
+
+static std::string WideToUtf8(const std::wstring& text)
+{
+    if (text.empty())
+    {
+        return {};
+    }
+
+    int needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (needed <= 1)
+    {
+        return {};
+    }
+
+    std::string out(static_cast<size_t>(needed - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+static std::wstring JsonEscape(const std::wstring& value)
+{
+    std::wstring out;
+    out.reserve(value.size() + 8);
+    for (wchar_t ch : value)
+    {
+        switch (ch)
+        {
+        case L'\\': out += L"\\\\"; break;
+        case L'"': out += L"\\\""; break;
+        case L'\n': out += L"\\n"; break;
+        case L'\r': out += L"\\r"; break;
+        case L'\t': out += L"\\t"; break;
+        default: out += ch; break;
+        }
+    }
+    return out;
+}
+
+static std::wstring BytesToHex(const std::vector<BYTE>& bytes)
+{
+    std::wostringstream oss;
+    oss << std::hex << std::setfill(L'0');
+    for (BYTE b : bytes)
+    {
+        oss << std::setw(2) << static_cast<int>(b);
+    }
+    return oss.str();
+}
+
+static std::wstring FormatFileTimeLocal(const FILETIME& ft)
+{
+    FILETIME localFt{};
+    SYSTEMTIME st{};
+    if (!FileTimeToLocalFileTime(&ft, &localFt) || !FileTimeToSystemTime(&localFt, &st))
+    {
+        return L"Unknown";
+    }
+
+    wchar_t buffer[64] = {};
+    swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u:%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return buffer;
+}
+
+static void AppendOutput(const std::wstring& text)
+{
+    if (!g_hOutputEdit)
+    {
+        return;
+    }
+
+    int len = GetWindowTextLengthW(g_hOutputEdit);
+    SendMessageW(g_hOutputEdit, EM_SETSEL, len, len);
+    std::wstring line = text + L"\r\n";
+    SendMessageW(g_hOutputEdit, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(line.c_str()));
+}
+
+static void ReadSettingsFromUi()
+{
+}
+
+static void SyncSettingsToUi()
+{
+}
+
+static void SaveSettings()
+{
+    const std::wstring iniPath = GetIniPath();
+    WritePrivateProfileStringW(kSectionSettings, kKeyUnsafeModeEnabled, g_unsafeModeEnabled ? L"1" : L"0", iniPath.c_str());
+}
+
+static void LoadSettings()
+{
+    const std::wstring iniPath = GetIniPath();
+
+    wchar_t buf[16] = {};
+    GetPrivateProfileStringW(kSectionSettings, kKeyUnsafeModeEnabled, L"0", buf, static_cast<DWORD>(std::size(buf)), iniPath.c_str());
+    g_unsafeModeEnabled = (buf[0] == L'1');
+    g_unsafeModeRequested = g_unsafeModeEnabled;
+
+    if (!g_isElevatedAdmin)
+    {
+        g_unsafeModeEnabled = false;
+        g_unsafeModeRequested = false;
+    }
+}
+
+static void UpdateActionButtons()
+{
+    bool unsafeAllowed = g_isElevatedAdmin && g_unsafeModeEnabled;
+
+    if (g_hUnsafeCheck)
+    {
+        EnableWindow(g_hUnsafeCheck, g_isElevatedAdmin ? TRUE : FALSE);
+        SendMessageW(g_hUnsafeCheck, BM_SETCHECK, g_unsafeModeRequested ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+
+    if (g_hEncryptButton)
+    {
+        EnableWindow(g_hEncryptButton, unsafeAllowed ? TRUE : FALSE);
+    }
+
+    if (g_hDecryptButton)
+    {
+        EnableWindow(g_hDecryptButton, unsafeAllowed ? TRUE : FALSE);
+    }
+
+    if (g_hIntegrityButton)
+    {
+        EnableWindow(g_hIntegrityButton, TRUE);
+    }
+}
+
+static void SyncCheckboxToUnsafe(HWND hWnd)
+{
+    UpdateActionButtons();
+    InvalidateRect(hWnd, nullptr, TRUE);
+}
+
+static void ApplyUnsafeModeRequest(HWND hWnd)
+{
+    if (!g_isElevatedAdmin)
+    {
+        g_unsafeModeRequested = false;
+        g_unsafeModeEnabled = false;
+        SaveSettings();
+        SyncCheckboxToUnsafe(hWnd);
+        MessageBoxW(hWnd, L"Unsafe mode requires Administrator elevation.", L"Admin required", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    if (g_unsafeModeRequested && !g_unsafeModeEnabled)
+    {
+        int first = MessageBoxW(hWnd, L"WARNING: Unsafe mode enables risky operations. Continue?", L"Unsafe mode", MB_OKCANCEL | MB_ICONEXCLAMATION);
+        if (first != IDOK)
+        {
+            g_unsafeModeRequested = false;
+            SyncCheckboxToUnsafe(hWnd);
+            AppendOutput(L"Unsafe mode enable cancelled.");
+            return;
+        }
+
+        int second = MessageBoxW(hWnd, L"Step 2/2: Apply Unsafe Mode now?", L"Unsafe mode", MB_YESNO | MB_ICONWARNING);
+        if (second != IDYES)
+        {
+            g_unsafeModeRequested = false;
+            SyncCheckboxToUnsafe(hWnd);
+            AppendOutput(L"Unsafe mode enable cancelled.");
+            return;
+        }
+
+        g_unsafeModeEnabled = true;
+        SaveSettings();
+        SyncCheckboxToUnsafe(hWnd);
+        AppendOutput(L"Unsafe mode enabled and applied.");
+        return;
+    }
+
+    if (!g_unsafeModeRequested && g_unsafeModeEnabled)
+    {
+        g_unsafeModeEnabled = false;
+        SaveSettings();
+        SyncCheckboxToUnsafe(hWnd);
+        AppendOutput(L"Unsafe mode disabled and applied.");
+        return;
+    }
+
+    SyncCheckboxToUnsafe(hWnd);
+    AppendOutput(L"Unsafe mode already in requested state.");
+}
+
+static std::wstring DriveTypeToText(UINT type)
+{
+    switch (type)
+    {
+    case DRIVE_FIXED: return L"Fixed";
+    case DRIVE_REMOVABLE: return L"Removable";
+    case DRIVE_REMOTE: return L"Network";
+    case DRIVE_CDROM: return L"CD-ROM";
+    case DRIVE_RAMDISK: return L"RAM Disk";
+    case DRIVE_NO_ROOT_DIR: return L"No Root";
+    default: return L"Unknown";
+    }
+}
+
+static std::wstring QueryBitLockerStatus(const std::wstring& root)
+{
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool shouldUninit = SUCCEEDED(hr);
+
+    hr = CoInitializeSecurity(nullptr, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE, nullptr);
+    if (FAILED(hr) && hr != RPC_E_TOO_LATE)
+    {
+        if (shouldUninit) CoUninitialize();
+        return L"Unknown";
+    }
+
+    IWbemLocator* locator = nullptr;
+    hr = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, IID_IWbemLocator, reinterpret_cast<LPVOID*>(&locator));
+    if (FAILED(hr) || !locator)
+    {
+        if (shouldUninit) CoUninitialize();
+        return L"Unknown";
+    }
+
+    IWbemServices* services = nullptr;
+    hr = locator->ConnectServer(_bstr_t(L"ROOT\\CIMV2\\Security\\MicrosoftVolumeEncryption"), nullptr, nullptr, nullptr, 0, nullptr, nullptr, &services);
+    if (FAILED(hr) || !services)
+    {
+        locator->Release();
+        if (shouldUninit) CoUninitialize();
+        return L"Unknown";
+    }
+
+    hr = CoSetProxyBlanket(services, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE);
+    if (FAILED(hr))
+    {
+        services->Release();
+        locator->Release();
+        if (shouldUninit) CoUninitialize();
+        return L"Unknown";
+    }
+
+    std::wstring letter = root.substr(0, 2);
+    std::wstring query = L"SELECT ProtectionStatus FROM Win32_EncryptableVolume WHERE DriveLetter='" + letter + L"'";
+
+    IEnumWbemClassObject* en = nullptr;
+    hr = services->ExecQuery(bstr_t("WQL"), bstr_t(query.c_str()), WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &en);
+
+    std::wstring status = L"Unknown";
+    if (SUCCEEDED(hr) && en)
+    {
+        IWbemClassObject* obj = nullptr;
+        ULONG ret = 0;
+        hr = en->Next(WBEM_INFINITE, 1, &obj, &ret);
+        if (SUCCEEDED(hr) && ret == 1 && obj)
+        {
+            VARIANT v;
+            VariantInit(&v);
+            if (SUCCEEDED(obj->Get(L"ProtectionStatus", 0, &v, nullptr, nullptr)) && v.vt == VT_I4)
+            {
+                if (v.intVal == 0) status = L"Off";
+                else if (v.intVal == 1) status = L"On";
+            }
+            VariantClear(&v);
+            obj->Release();
+        }
+        en->Release();
+    }
+
+    services->Release();
+    locator->Release();
+    if (shouldUninit) CoUninitialize();
+
+    return status;
+}
+
+static void RefreshDriveList()
+{
+    g_drives.clear();
+
+    wchar_t drives[512] = {};
+    DWORD len = GetLogicalDriveStringsW(static_cast<DWORD>(std::size(drives)), drives);
+    if (len == 0 || len >= std::size(drives))
+    {
+        AppendOutput(L"Drive enumeration failed.");
+        return;
+    }
+
+    const wchar_t* cur = drives;
+    while (*cur)
+    {
+        DriveInfo di;
+        di.root = cur;
+        di.driveType = DriveTypeToText(GetDriveTypeW(cur));
+
+        wchar_t vol[MAX_PATH] = {};
+        wchar_t fs[MAX_PATH] = {};
+        DWORD serial = 0, maxComp = 0, flags = 0;
+        if (GetVolumeInformationW(cur, vol, MAX_PATH, &serial, &maxComp, &flags, fs, MAX_PATH))
+        {
+            di.volumeName = vol;
+            di.fileSystem = fs;
+        }
+        else
+        {
+            di.volumeName = L"(unknown)";
+            di.fileSystem = L"(unknown)";
+        }
+
+        ULARGE_INTEGER freeBytes{}, totalBytes{}, totalFree{};
+        if (GetDiskFreeSpaceExW(cur, &freeBytes, &totalBytes, &totalFree))
+        {
+            di.freeBytes = freeBytes.QuadPart;
+            di.totalBytes = totalBytes.QuadPart;
+        }
+
+        di.bitLocker = (di.driveType == L"Fixed") ? QueryBitLockerStatus(di.root) : L"N/A";
+
+        g_drives.push_back(di);
+        cur += wcslen(cur) + 1;
+    }
+
+    SendMessageW(g_hDriveList, LB_RESETCONTENT, 0, 0);
+    for (const auto& d : g_drives)
+    {
+        double totalGb = d.totalBytes > 0 ? (double)d.totalBytes / (1024.0 * 1024.0 * 1024.0) : 0.0;
+        double freeGb = d.freeBytes > 0 ? (double)d.freeBytes / (1024.0 * 1024.0 * 1024.0) : 0.0;
+
+        std::wostringstream line;
+        line << d.root << L" | " << d.driveType << L" | Vol=" << d.volumeName << L" | FS=" << d.fileSystem
+             << L" | Free=" << std::fixed << std::setprecision(1) << freeGb << L"GB/" << totalGb << L"GB"
+             << L" | BitLocker=" << d.bitLocker;
+
+        std::wstring s = line.str();
+        SendMessageW(g_hDriveList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(s.c_str()));
+    }
+
+    AppendOutput(L"Drive scan complete.");
+}
+
+static bool ReadFileBytes(const std::wstring& path, std::vector<BYTE>& out)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
+
+    file.seekg(0, std::ios::end);
+    std::streamoff len = file.tellg();
+    if (len < 0) return false;
+
+    file.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(len));
+    if (!out.empty())
+    {
+        file.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
+    }
+
+    return file.good() || file.eof();
+}
+
+static bool WriteFileBytes(const std::wstring& path, const std::vector<BYTE>& data)
+{
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) return false;
+
+    if (!data.empty())
+    {
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    }
+
+    return file.good();
+}
+
+static bool DeriveAes256Key(const std::wstring& password, const std::array<BYTE, 16>& salt, std::array<BYTE, 32>& key)
+{
+    BCRYPT_ALG_HANDLE hSha = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hSha, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status < 0)
+    {
+        return false;
+    }
+
+    std::vector<BYTE> passBytes(reinterpret_cast<const BYTE*>(password.data()), reinterpret_cast<const BYTE*>(password.data()) + password.size() * sizeof(wchar_t));
+
+    status = BCryptDeriveKeyPBKDF2(hSha,
+                                   passBytes.data(), static_cast<ULONG>(passBytes.size()),
+                                   const_cast<PUCHAR>(salt.data()), static_cast<ULONG>(salt.size()),
+                                   120000,
+                                   key.data(), static_cast<ULONG>(key.size()),
+                                   0);
+
+    BCryptCloseAlgorithmProvider(hSha, 0);
+    return status >= 0;
+}
+
+static bool AesCbcEncrypt(const std::vector<BYTE>& plain, const std::array<BYTE, 32>& key, const std::array<BYTE, 16>& iv, std::vector<BYTE>& cipher)
+{
+    BCRYPT_ALG_HANDLE hAes = nullptr;
+    BCRYPT_KEY_HANDLE hKey = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAes, BCRYPT_AES_ALGORITHM, nullptr, 0);
+    if (status < 0) return false;
+
+    status = BCryptSetProperty(hAes, BCRYPT_CHAINING_MODE, reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CBC)), sizeof(BCRYPT_CHAIN_MODE_CBC), 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAes, 0);
+        return false;
+    }
+
+    DWORD objectLen = 0, resultLen = 0;
+    status = BCryptGetProperty(hAes, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen), &resultLen, 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAes, 0);
+        return false;
+    }
+
+    std::vector<BYTE> keyObj(objectLen);
+    status = BCryptGenerateSymmetricKey(hAes, &hKey, keyObj.data(), objectLen, const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAes, 0);
+        return false;
+    }
+
+    std::array<BYTE, 16> ivCopy = iv;
+    DWORD outLen = 0;
+    status = BCryptEncrypt(hKey,
+                           const_cast<PUCHAR>(plain.data()), static_cast<ULONG>(plain.size()),
+                           nullptr,
+                           ivCopy.data(), static_cast<ULONG>(ivCopy.size()),
+                           nullptr, 0, &outLen,
+                           BCRYPT_BLOCK_PADDING);
+
+    if (status >= 0)
+    {
+        cipher.resize(outLen);
+        ivCopy = iv;
+        status = BCryptEncrypt(hKey,
+                               const_cast<PUCHAR>(plain.data()), static_cast<ULONG>(plain.size()),
+                               nullptr,
+                               ivCopy.data(), static_cast<ULONG>(ivCopy.size()),
+                               cipher.data(), outLen, &outLen,
+                               BCRYPT_BLOCK_PADDING);
+        if (status >= 0)
+        {
+            cipher.resize(outLen);
+        }
+    }
+
+    BCryptDestroyKey(hKey);
+    BCryptCloseAlgorithmProvider(hAes, 0);
+    return status >= 0;
+}
+
+static bool AesCbcDecrypt(const std::vector<BYTE>& cipher, const std::array<BYTE, 32>& key, const std::array<BYTE, 16>& iv, std::vector<BYTE>& plain)
+{
+    BCRYPT_ALG_HANDLE hAes = nullptr;
+    BCRYPT_KEY_HANDLE hKey = nullptr;
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAes, BCRYPT_AES_ALGORITHM, nullptr, 0);
+    if (status < 0) return false;
+
+    status = BCryptSetProperty(hAes, BCRYPT_CHAINING_MODE, reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CBC)), sizeof(BCRYPT_CHAIN_MODE_CBC), 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAes, 0);
+        return false;
+    }
+
+    DWORD objectLen = 0, resultLen = 0;
+    status = BCryptGetProperty(hAes, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen), &resultLen, 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAes, 0);
+        return false;
+    }
+
+    std::vector<BYTE> keyObj(objectLen);
+    status = BCryptGenerateSymmetricKey(hAes, &hKey, keyObj.data(), objectLen, const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAes, 0);
+        return false;
+    }
+
+    std::array<BYTE, 16> ivCopy = iv;
+    DWORD outLen = 0;
+    status = BCryptDecrypt(hKey,
+                           const_cast<PUCHAR>(cipher.data()), static_cast<ULONG>(cipher.size()),
+                           nullptr,
+                           ivCopy.data(), static_cast<ULONG>(ivCopy.size()),
+                           nullptr, 0, &outLen,
+                           BCRYPT_BLOCK_PADDING);
+
+    if (status >= 0)
+    {
+        plain.resize(outLen);
+        ivCopy = iv;
+        status = BCryptDecrypt(hKey,
+                               const_cast<PUCHAR>(cipher.data()), static_cast<ULONG>(cipher.size()),
+                               nullptr,
+                               ivCopy.data(), static_cast<ULONG>(ivCopy.size()),
+                               plain.data(), outLen, &outLen,
+                               BCRYPT_BLOCK_PADDING);
+        if (status >= 0)
+        {
+            plain.resize(outLen);
+        }
+    }
+
+    BCryptDestroyKey(hKey);
+    BCryptCloseAlgorithmProvider(hAes, 0);
+    return status >= 0;
+}
+
+#pragma pack(push, 1)
+struct EncryptHeader
+{
+    char magic[8];
+    BYTE salt[16];
+    BYTE iv[16];
+    UINT64 originalSize;
+};
+#pragma pack(pop)
+
+static bool EncryptSelectedFile(HWND hWnd)
+{
+    OPENFILENAMEW ofn{};
+    wchar_t path[MAX_PATH] = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hWnd;
+    ofn.lpstrFilter = L"All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrTitle = L"Select file to encrypt";
+
+    if (!GetOpenFileNameW(&ofn))
+    {
+        return false;
+    }
+
+    g_selectedFilePath = path;
+
+    wchar_t password[256] = {};
+    GetWindowTextW(g_hPasswordEdit, password, static_cast<int>(std::size(password)));
+    if (password[0] == L'\0')
+    {
+        MessageBoxW(hWnd, L"Enter a password before encrypting.", L"EncryptDeat", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+
+    AppendOutput(L"Encrypt: reading input file... " + g_selectedFilePath);
+
+    std::vector<BYTE> plain;
+    if (!ReadFileBytes(g_selectedFilePath, plain))
+    {
+        MessageBoxW(hWnd, L"Failed to read selected file.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    std::array<BYTE, 16> salt{};
+    std::array<BYTE, 16> iv{};
+    BCryptGenRandom(nullptr, salt.data(), static_cast<ULONG>(salt.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    BCryptGenRandom(nullptr, iv.data(), static_cast<ULONG>(iv.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+
+    std::array<BYTE, 32> key{};
+    AppendOutput(L"Encrypt: deriving key (PBKDF2)...");
+    if (!DeriveAes256Key(password, salt, key))
+    {
+        MessageBoxW(hWnd, L"Key derivation failed.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    AppendOutput(L"Encrypt: AES-256 encryption in progress...");
+    std::vector<BYTE> cipher;
+    if (!AesCbcEncrypt(plain, key, iv, cipher))
+    {
+        MessageBoxW(hWnd, L"Encryption failed.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    EncryptHeader header{};
+    memcpy_s(header.magic, sizeof(header.magic), "EDEAT01", 7);
+    memcpy_s(header.salt, sizeof(header.salt), salt.data(), salt.size());
+    memcpy_s(header.iv, sizeof(header.iv), iv.data(), iv.size());
+    header.originalSize = static_cast<UINT64>(plain.size());
+
+    std::vector<BYTE> output(sizeof(EncryptHeader) + cipher.size());
+    memcpy_s(output.data(), output.size(), &header, sizeof(header));
+    memcpy_s(output.data() + sizeof(header), output.size() - sizeof(header), cipher.data(), cipher.size());
+
+    std::wstring outPath = g_selectedFilePath + L".encd";
+    AppendOutput(L"Encrypt: writing encrypted output...");
+    if (!WriteFileBytes(outPath, output))
+    {
+        MessageBoxW(hWnd, L"Failed to write encrypted file.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    AppendOutput(L"Encrypt complete: " + outPath);
+    return true;
+}
+
+static bool DecryptSelectedFile(HWND hWnd)
+{
+    if (!(g_isElevatedAdmin && g_unsafeModeEnabled))
+    {
+        MessageBoxW(hWnd, L"Decrypt is restricted to elevated Unsafe Mode.", L"EncryptDeat", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+
+    OPENFILENAMEW ofn{};
+    wchar_t path[MAX_PATH] = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hWnd;
+    ofn.lpstrFilter = L"EncryptDeat Encrypted (*.encd)\0*.encd\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrTitle = L"Select encrypted file";
+
+    if (!GetOpenFileNameW(&ofn))
+    {
+        return false;
+    }
+
+    g_selectedFilePath = path;
+
+    AppendOutput(L"Decrypt: reading encrypted file... " + g_selectedFilePath);
+
+    std::vector<BYTE> input;
+    if (!ReadFileBytes(g_selectedFilePath, input) || input.size() < sizeof(EncryptHeader))
+    {
+        MessageBoxW(hWnd, L"Invalid encrypted file.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    EncryptHeader header{};
+    memcpy_s(&header, sizeof(header), input.data(), sizeof(header));
+    if (strncmp(header.magic, "EDEAT01", 7) != 0)
+    {
+        MessageBoxW(hWnd, L"Selected file is not EncryptDeat format.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    std::array<BYTE, 16> salt{};
+    std::array<BYTE, 16> iv{};
+    memcpy_s(salt.data(), salt.size(), header.salt, sizeof(header.salt));
+    memcpy_s(iv.data(), iv.size(), header.iv, sizeof(header.iv));
+
+    std::array<BYTE, 32> key{};
+    AppendOutput(L"Decrypt: deriving key (PBKDF2)...");
+    if (!DeriveAes256Key(password, salt, key))
+    {
+        MessageBoxW(hWnd, L"Key derivation failed.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    std::vector<BYTE> cipher(input.begin() + static_cast<std::ptrdiff_t>(sizeof(EncryptHeader)), input.end());
+    std::vector<BYTE> plain;
+
+    AppendOutput(L"Decrypt: AES-256 decryption in progress...");
+    if (!AesCbcDecrypt(cipher, key, iv, plain))
+    {
+        MessageBoxW(hWnd, L"Decryption failed. Password may be incorrect.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    if (header.originalSize > plain.size())
+    {
+        MessageBoxW(hWnd, L"Decrypted content size mismatch.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    plain.resize(static_cast<size_t>(header.originalSize));
+
+    std::wstring outPath = g_selectedFilePath;
+    size_t extPos = outPath.rfind(L".encd");
+    if (extPos != std::wstring::npos && extPos == outPath.size() - 5)
+    {
+        outPath = outPath.substr(0, extPos);
+    }
+    outPath += L".decrypted";
+
+    AppendOutput(L"Decrypt: writing output file...");
+    if (!WriteFileBytes(outPath, plain))
+    {
+        MessageBoxW(hWnd, L"Failed to write decrypted file.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    AppendOutput(L"Decrypt complete: " + outPath);
+    return true;
+}
+
+static bool ComputeFileSha256(const std::wstring& path, int chunkMb, std::wstring& shaOut, ULONGLONG& sizeOut, FILETIME& writeTimeOut)
+{
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    BY_HANDLE_FILE_INFORMATION fi{};
+    if (!GetFileInformationByHandle(hFile, &fi))
+    {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    sizeOut = (static_cast<ULONGLONG>(fi.nFileSizeHigh) << 32ULL) | fi.nFileSizeLow;
+    writeTimeOut = fi.ftLastWriteTime;
+
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+
+    DWORD objLen = 0;
+    DWORD hashLen = 0;
+    DWORD cbResult = 0;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (status < 0)
+    {
+        CloseHandle(hFile);
+        return false;
+    }
+
+    status = BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objLen), sizeof(objLen), &cbResult, 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        CloseHandle(hFile);
+        return false;
+    }
+
+    status = BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashLen), sizeof(hashLen), &cbResult, 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        CloseHandle(hFile);
+        return false;
+    }
+
+    std::vector<BYTE> hashObj(objLen);
+    status = BCryptCreateHash(hAlg, &hHash, hashObj.data(), objLen, nullptr, 0, 0);
+    if (status < 0)
+    {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        CloseHandle(hFile);
+        return false;
+    }
+
+    DWORD chunk = static_cast<DWORD>(chunkMb * 1024 * 1024);
+    if (chunk < 4096) chunk = 4096;
+    std::vector<BYTE> buf(chunk);
+
+    DWORD read = 0;
+    while (ReadFile(hFile, buf.data(), static_cast<DWORD>(buf.size()), &read, nullptr) && read > 0)
+    {
+        status = BCryptHashData(hHash, buf.data(), read, 0);
+        if (status < 0)
+        {
+            BCryptDestroyHash(hHash);
+            BCryptCloseAlgorithmProvider(hAlg, 0);
+            CloseHandle(hFile);
+            return false;
+        }
+    }
+
+    std::vector<BYTE> hash(hashLen);
+    status = BCryptFinishHash(hHash, hash.data(), hashLen, 0);
+
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    CloseHandle(hFile);
+
+    if (status < 0)
+    {
+        return false;
+    }
+
+    shaOut = BytesToHex(hash);
+    return true;
+}
+
+static bool RunIntegrityCheck(HWND hWnd)
+{
+    OPENFILENAMEW ofn{};
+    wchar_t path[MAX_PATH] = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hWnd;
+    ofn.lpstrFilter = L"All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrTitle = L"Select file for integrity check";
+
+    if (!GetOpenFileNameW(&ofn))
+    {
+        return false;
+    }
+
+    g_selectedFilePath = path;
+
+    ReadSettingsFromUi();
+
+    AppendOutput(L"Integrity: hashing started... " + g_selectedFilePath);
+
+    std::wstring sha;
+    ULONGLONG fileSize = 0;
+    FILETIME lastWrite{};
+
+    if (!ComputeFileSha256(g_selectedFilePath, g_settings.hashChunkMb, sha, fileSize, lastWrite))
+    {
+        MessageBoxW(hWnd, L"Integrity hash failed.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    g_lastIntegrity.hasData = true;
+    g_lastIntegrity.filePath = g_selectedFilePath;
+    g_lastIntegrity.sha256 = sha;
+    g_lastIntegrity.fileSize = fileSize;
+    g_lastIntegrity.lastWriteTime = lastWrite;
+
+    std::wostringstream line;
+    line << L"Integrity complete | SHA256=" << sha << L" | Size=" << fileSize << L" bytes"
+         << L" | LastWrite=" << FormatFileTimeLocal(lastWrite);
+    AppendOutput(line.str());
+    return true;
+}
+
+static std::wstring BuildReportJson()
+{
+    std::wostringstream json;
+    json << L"{\n";
+    json << L"  \"app\": \"EncryptDeat\",\n";
+    json << L"  \"mode\": \"" << (g_unsafeModeEnabled ? L"unsafe" : L"safe") << L"\",\n";
+    json << L"  \"elevatedAdmin\": " << (g_isElevatedAdmin ? L"true" : L"false") << L",\n";
+
+    json << L"  \"settings\": {\n";
+    json << L"    \"hashChunkMb\": " << g_settings.hashChunkMb << L"\n";
+    json << L"  },\n";
+
+    json << L"  \"drives\": [\n";
+    for (size_t i = 0; i < g_drives.size(); ++i)
+    {
+        const auto& d = g_drives[i];
+        json << L"    {\"root\": \"" << JsonEscape(d.root)
+             << L"\", \"type\": \"" << JsonEscape(d.driveType)
+             << L"\", \"volume\": \"" << JsonEscape(d.volumeName)
+             << L"\", \"fileSystem\": \"" << JsonEscape(d.fileSystem)
+             << L"\", \"freeBytes\": " << d.freeBytes
+             << L", \"totalBytes\": " << d.totalBytes
+             << L", \"bitLocker\": \"" << JsonEscape(d.bitLocker) << L"\"}";
+
+        if (i + 1 < g_drives.size())
+        {
+            json << L",";
+        }
+        json << L"\n";
+    }
+    json << L"  ],\n";
+
+    json << L"  \"selectedFile\": \"" << JsonEscape(g_selectedFilePath) << L"\",\n";
+
+    json << L"  \"integrity\": ";
+    if (g_lastIntegrity.hasData)
+    {
+        json << L"{\"file\": \"" << JsonEscape(g_lastIntegrity.filePath)
+             << L"\", \"sha256\": \"" << JsonEscape(g_lastIntegrity.sha256)
+             << L"\", \"size\": " << g_lastIntegrity.fileSize
+             << L", \"lastWrite\": \"" << JsonEscape(FormatFileTimeLocal(g_lastIntegrity.lastWriteTime)) << L"\"}";
+    }
+    else
+    {
+        json << L"null";
+    }
+    json << L"\n";
+
+    json << L"}";
+    return json.str();
+}
+
+static bool ExportReport(HWND hWnd)
+{
+    ReadSettingsFromUi();
+    g_lastReportJson = BuildReportJson();
+
+    wchar_t path[MAX_PATH] = L"EncryptDeat-Report.json";
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hWnd;
+    ofn.lpstrFilter = L"JSON Files (*.json)\0*.json\0Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    ofn.lpstrDefExt = L"json";
+
+    if (!GetSaveFileNameW(&ofn))
+    {
+        return false;
+    }
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out)
+    {
+        MessageBoxW(hWnd, L"Failed to open destination file.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    std::string utf8 = WideToUtf8(g_lastReportJson);
+    out.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+
+    if (!out.good())
+    {
+        MessageBoxW(hWnd, L"Failed to write report.", L"EncryptDeat", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    AppendOutput(L"Report exported: " + std::wstring(path));
+    return true;
+}
+
+
+static void LayoutControls(HWND hWnd)
+{
+    RECT rc{};
+    GetClientRect(hWnd, &rc);
+
+    int margin = 12;
+    int top = 150;
+    int width = rc.right - rc.left;
+    int height = rc.bottom - rc.top;
+
+    int leftWidth = (std::max)(470, width / 2 - margin * 2);
+    int rightX = margin + leftWidth + margin;
+    int rightWidth = (std::max)(280, width - rightX - margin);
+
+    int y = top;
+    MoveWindow(g_hUnsafeCheck, margin, y, leftWidth - 120, 24, TRUE);
+    MoveWindow(g_hUnsafeButton, margin + leftWidth - 110, y - 2, 100, 28, TRUE);
+    y += 30;
+
+    MoveWindow(g_hRescanButton, margin, y, 120, 28, TRUE);
+    MoveWindow(g_hEncryptButton, margin + 130, y, 85, 28, TRUE);
+    MoveWindow(g_hPasswordEdit, margin + 220, y + 2, 170, 24, TRUE);
+    MoveWindow(g_hDecryptButton, margin + 400, y, 85, 28, TRUE);
+    y += 34;
+
+    MoveWindow(g_hIntegrityButton, margin, y, 170, 28, TRUE);
+    MoveWindow(g_hExportButton, margin + 180, y, 160, 28, TRUE);
+    y += 34;
+
+    int driveListHeight = (std::max)(140, height - y - margin);
+    MoveWindow(g_hDriveList, margin, y, leftWidth, driveListHeight, TRUE);
+
+    MoveWindow(g_hOutputEdit, rightX, top, rightWidth, (std::max)(220, height - top - margin), TRUE);
+}
+
+static void DrawFuturisticHeader(HDC hdc, const RECT& rc, const std::wstring& text)
+{
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(100, 220, 255));
+
+    HFONT hFont = CreateFontW(-20, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+
+    HFONT old = static_cast<HFONT>(SelectObject(hdc, hFont));
+    RECT copy = rc;
+    DrawTextW(hdc, text.c_str(), -1, &copy, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, old);
+    DeleteObject(hFont);
+}
+
+static void DoPaint(HWND hWnd, HDC hdc)
+{
+    RECT rc{};
+    GetClientRect(hWnd, &rc);
+
+    HBRUSH bg = CreateSolidBrush(RGB(2, 10, 22));
+    FillRect(hdc, &rc, bg);
+    DeleteObject(bg);
+
+    HPEN grid = CreatePen(PS_SOLID, 1, RGB(10, 70, 120));
+    HPEN glow = CreatePen(PS_SOLID, 1, RGB(20, 130, 200));
+
+    SelectObject(hdc, grid);
+    for (int y = 0; y < rc.bottom; y += 26)
+    {
+        MoveToEx(hdc, 0, y, nullptr);
+        LineTo(hdc, rc.right, y);
+    }
+
+    SelectObject(hdc, glow);
+    for (int x = 0; x < rc.right; x += 36)
+    {
+        MoveToEx(hdc, x, 0, nullptr);
+        LineTo(hdc, x, rc.bottom);
+    }
+
+    DeleteObject(grid);
+    DeleteObject(glow);
+
+    RECT header = { 12, 12, rc.right - 12, 44 };
+    std::wstring mode = g_unsafeModeEnabled ? L"EncryptDeat // UNSAFE MODE" : L"EncryptDeat // SAFE MODE";
+    DrawFuturisticHeader(hdc, header, mode);
+
+    RECT status = { 12, 50, rc.right - 12, 130 };
+    std::wstring text;
+    if (!g_isElevatedAdmin)
+    {
+        text = L"Not elevated. Unsafe mode is forced OFF. Decrypt/aggressive options are locked.";
+    }
+    else
+    {
+        text = g_unsafeModeEnabled
+                   ? L"Elevated admin detected. Unsafe mode enabled for gated operations."
+                   : L"Elevated admin detected. Unsafe mode is OFF by default.";
+    }
+
+    HFONT body = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Consolas");
+    HFONT old = static_cast<HFONT>(SelectObject(hdc, body));
+    SetTextColor(hdc, RGB(170, 225, 255));
+    DrawTextW(hdc, text.c_str(), -1, &status, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    SelectObject(hdc, old);
+    DeleteObject(body);
+}
+
+ATOM MyRegisterClass(HINSTANCE hInstance);
+BOOL InitInstance(HINSTANCE, int);
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK About(HWND, UINT, WPARAM, LPARAM);
+
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
+                      _In_opt_ HINSTANCE hPrevInstance,
+                      _In_ LPWSTR lpCmdLine,
+                      _In_ int nCmdShow)
+{
+    UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
+
+    LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
+    LoadStringW(hInstance, IDC_ENCRYPTDEAT, szWindowClass, MAX_LOADSTRING);
+    MyRegisterClass(hInstance);
+
+    if (!InitInstance(hInstance, nCmdShow))
+        return FALSE;
+
+    HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_ENCRYPTDEAT));
+
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0))
+    {
+        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    return static_cast<int>(msg.wParam);
+}
+
+ATOM MyRegisterClass(HINSTANCE hInstance)
+{
+    WNDCLASSEXW wcex{};
+    wcex.cbSize = sizeof(WNDCLASSEXW);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = WndProc;
+    wcex.hInstance = hInstance;
+    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ENCRYPTDEAT));
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wcex.lpszMenuName = MAKEINTRESOURCEW(IDC_ENCRYPTDEAT);
+    wcex.lpszClassName = szWindowClass;
+    wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+
+    return RegisterClassExW(&wcex);
+}
+
+BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
+{
+    hInst = hInstance;
+
+    g_isElevatedAdmin = GetIsProcessElevatedAdmin();
+    if (!g_isElevatedAdmin)
+    {
+        MessageBoxW(nullptr,
+                    L"EncryptDeat must be run as Administrator.\nPlease relaunch and approve the UAC prompt.",
+                    L"Administrator permission required",
+                    MB_OK | MB_ICONERROR);
+        return FALSE;
+    }
+
+    LoadSettings();
+
+    HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
+                              CW_USEDEFAULT, 0, 1320, 820,
+                              nullptr, nullptr, hInstance, nullptr);
+    if (!hWnd)
+        return FALSE;
+
+    g_hUnsafeCheck = CreateWindowW(L"Button", L"Enable Unsafe Mode (admin required)", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                   12, 150, 320, 24, hWnd, (HMENU)kButtonToggleUnsafeId, hInstance, nullptr);
+    g_hUnsafeButton = CreateWindowW(L"Button", L"Apply Mode", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                                    336, 150, 100, 28, hWnd, (HMENU)kButtonApplyUnsafeId, hInstance, nullptr);
+
+    g_hRescanButton = CreateWindowW(L"Button", L"Rescan Drives", WS_CHILD | WS_VISIBLE,
+                                    12, 210, 120, 28, hWnd, (HMENU)kButtonRescanId, hInstance, nullptr);
+    g_hEncryptButton = CreateWindowW(L"Button", L"Encrypt", WS_CHILD | WS_VISIBLE,
+                                     142, 210, 85, 28, hWnd, (HMENU)kButtonEncryptId, hInstance, nullptr);
+    g_hPasswordEdit = CreateWindowW(L"Edit", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL,
+                                    232, 212, 170, 24, hWnd, (HMENU)kEditPasswordId, hInstance, nullptr);
+    g_hDecryptButton = CreateWindowW(L"Button", L"Decrypt", WS_CHILD | WS_VISIBLE,
+                                     407, 210, 85, 28, hWnd, (HMENU)kButtonDecryptId, hInstance, nullptr);
+
+    g_hIntegrityButton = CreateWindowW(L"Button", L"Run Integrity Check", WS_CHILD | WS_VISIBLE,
+                                       12, 244, 170, 28, hWnd, (HMENU)kButtonIntegrityId, hInstance, nullptr);
+    g_hExportButton = CreateWindowW(L"Button", L"Export Report", WS_CHILD | WS_VISIBLE,
+                                    192, 244, 160, 28, hWnd, (HMENU)kButtonExportId, hInstance, nullptr);
+
+    g_hDriveList = CreateWindowW(L"ListBox", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | WS_BORDER,
+                                 12, 278, 530, 430, hWnd, (HMENU)kListDrivesId, hInstance, nullptr);
+
+    g_hOutputEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"Edit", L"",
+                                    WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+                                    560, 150, 730, 558, hWnd, (HMENU)kEditOutputId, hInstance, nullptr);
+
+    SyncSettingsToUi();
+    SyncCheckboxToUnsafe(hWnd);
+    LayoutControls(hWnd);
+    RefreshDriveList();
+
+    AppendOutput(L"EncryptDeat initialized.");
+    AppendOutput(L"Admin elevation detected.");
+
+    ShowWindow(hWnd, nCmdShow);
+    UpdateWindow(hWnd);
+    InvalidateRect(hWnd, nullptr, TRUE);
+
+    return TRUE;
+}
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_SIZE:
+        LayoutControls(hWnd);
+        return 0;
+
+    case WM_COMMAND:
+    {
+        int wmId = LOWORD(wParam);
+        int notifyCode = HIWORD(wParam);
+
+        if (wmId == kButtonToggleUnsafeId && notifyCode == BN_CLICKED)
+        {
+            g_unsafeModeEnabled = (SendMessageW(g_hUnsafeCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+            EnableUnsafeModeWithConfirmation(hWnd);
+            return 0;
+        }
+
+        if (wmId == kButtonApplyUnsafeId && notifyCode == BN_CLICKED)
+        {
+            ReadSettingsFromUi();
+            SaveSettings();
+            SyncCheckboxToUnsafe(hWnd);
+            AppendOutput(L"Settings applied and saved.");
+            return 0;
+        }
+
+        if (wmId == kButtonRescanId && notifyCode == BN_CLICKED)
+        {
+            RefreshDriveList();
+            return 0;
+        }
+
+
+        if (wmId == kButtonEncryptId && notifyCode == BN_CLICKED)
+        {
+            EncryptSelectedFile(hWnd);
+            return 0;
+        }
+
+        if (wmId == kButtonDecryptId && notifyCode == BN_CLICKED)
+        {
+            DecryptSelectedFile(hWnd);
+            return 0;
+        }
+
+        if (wmId == kButtonIntegrityId && notifyCode == BN_CLICKED)
+        {
+            RunIntegrityCheck(hWnd);
+            return 0;
+        }
+
+        if (wmId == kButtonExportId && notifyCode == BN_CLICKED)
+        {
+            ExportReport(hWnd);
+            return 0;
+        }
+
+        if (wmId == IDM_ABOUT)
+        {
+            DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
+            return 0;
+        }
+
+        if (wmId == IDM_EXIT)
+        {
+            DestroyWindow(hWnd);
+            return 0;
+        }
+
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        DoPaint(hWnd, hdc);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_DESTROY:
+        SaveSettings();
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(hDlg, LOWORD(wParam));
+            return (INT_PTR)TRUE;
+        }
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
